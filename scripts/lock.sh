@@ -4,11 +4,10 @@ set -euo pipefail
 
 acquire_lock() {
   local lockfile="$1"
-  if [[ -e "$lockfile" ]]; then
+  if ! mkdir "$lockfile" 2>/dev/null; then
     echo "Lock já existente em ${lockfile}. Abortando execução." >&2
     return 1
   fi
-  echo "$$" > "$lockfile"
   # shellcheck disable=SC2064
   trap "release_lock '${lockfile}'" EXIT INT TERM
   return 0
@@ -16,5 +15,5 @@ acquire_lock() {
 
 release_lock() {
   local lockfile="$1"
-  rm -f "$lockfile"
+  rmdir "$lockfile" 2>/dev/null || true
 }

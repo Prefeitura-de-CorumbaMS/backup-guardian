@@ -64,6 +64,8 @@ send_disk_space_alert() {
   local target_dir="$3"
   local available_mb="$4"
   local required_mb="$5"
+  local backup_size_mb="${6:-N/A}"
+  local safety_margin_mb="${7:-N/A}"
   
   local total_mb used_mb percent_used
   total_mb=$(df -BM "$target_dir" | awk 'NR==2 {print $2}' | sed 's/M//')
@@ -83,17 +85,22 @@ send_disk_space_alert() {
 
 💾 INFORMAÇÕES DO DISCO:
    • Diretório: ${target_dir}
-   • Tamanho Total: ${total_mb} MB
+   • Tamanho Total: ${total_mb} MB ($(awk "BEGIN {printf \"%.1f\", ${total_mb}/1024}") GB)
    • Espaço Usado: ${used_mb} MB (${percent_used})
-   • Espaço Disponível: ${available_mb} MB
-   • Espaço Necessário: ${required_mb} MB
-   • Faltam: $((required_mb - available_mb)) MB
+   • Espaço Disponível: ${available_mb} MB ($(awk "BEGIN {printf \"%.1f\", ${available_mb}/1024}") GB)
+
+📊 CÁLCULO DE ESPAÇO NECESSÁRIO:
+   • Tamanho do Backup: ${backup_size_mb} MB ($(awk "BEGIN {printf \"%.1f\", ${backup_size_mb}/1024}") GB)
+   • Margem de Segurança: ${safety_margin_mb} MB ($(awk "BEGIN {printf \"%.1f\", ${safety_margin_mb}/1024}") GB)
+   • Total Necessário: ${required_mb} MB ($(awk "BEGIN {printf \"%.1f\", ${required_mb}/1024}") GB)
+   • Faltam: $((required_mb - available_mb)) MB ($(awk "BEGIN {printf \"%.1f\", $((required_mb - available_mb))/1024}") GB)
 
 🔴 AÇÃO URGENTE NECESSÁRIA:
    1. Libere espaço em disco
    2. Remova arquivos desnecessários
    3. Considere expandir o disco
    4. Verifique ZIPs antigos que podem ser removidos
+   5. Ajuste MIN_FREE_SPACE_MB no .env se necessário
 
 ⚠️  O backup foi ABORTADO para evitar falhas.
 

@@ -36,19 +36,46 @@ on_error() {
 # ============================================================================
 # FUNÇÕES AUXILIARES
 # ============================================================================
+calculate_backup_size() {
+  local items=("$@")
+  local total_kb=0
+  local path
+  
+  for item in "${items[@]}"; do
+    path="${item%%|*}"
+    if [[ -e "$path" ]]; then
+      local size_kb
+      size_kb=$(du -sk "$path" 2>/dev/null | awk '{print $1}')
+      total_kb=$((total_kb + size_kb))
+    fi
+  done
+  
+  echo "$((total_kb / 1024))"
+}
+
 check_disk_space() {
   local target_dir="$1"
-  local required_mb="$2"
+  local items_ref="$2"
   local email_to="$3"
   local app_name="$4"
   
-  local available_mb
+  local available_mb used_mb total_mb
   available_mb=$(df -BM "$target_dir" | awk 'NR==2 {print $4}' | sed 's/M//')
+  used_mb=$(df -BM "$target_dir" | awk 'NR==2 {print $3}' | sed 's/M//')
+  total_mb=$(df -BM "$target_dir" | awk 'NR==2 {print $2}' | sed 's/M//')
+  
+  local backup_size_mb
+  eval "backup_size_mb=\$(calculate_backup_size \"\${${items_ref}[@]}\")"
+  
+  local safety_margin_mb="${MIN_FREE_SPACE_MB:-51200}"
+  local required_mb=$((backup_size_mb + safety_margin_mb))
+  
+  log_info "Verificação de espaço: Disponível=${available_mb}MB, Backup=${backup_size_mb}MB, Margem=${safety_margin_mb}MB, Necessário=${required_mb}MB"
   
   if [[ $available_mb -lt $required_mb ]]; then
-    log_error "Espaço insuficiente. Disponível: ${available_mb}MB, Necessário: ${required_mb}MB"
+    log_error "Espaço insuficiente. Disponível: ${available_mb}MB, Necessário: ${required_mb}MB (Backup: ${backup_size_mb}MB + Margem: ${safety_margin_mb}MB)"
     if [[ -n "$email_to" ]]; then
-      send_disk_space_alert "$email_to" "$app_name" "$target_dir" "$available_mb" "$required_mb"
+      send_disk_space_alert "$email_to" "$app_name" "$target_dir" "$available_mb" "$required_mb" "$backup_size_mb" "$safety_margin_mb"
     fi
     return 1
   fi
@@ -100,7 +127,19 @@ cleanup_old_archives() {
   local keep_months=12
   
   log_info "Limpando arquivos mensais com mais de ${keep_months} meses..."
-  find "$app_dir" -name "${app_id}_backup_mensal_*.tar.gz" -type f -mtime +$((keep_months * 30)) -delete 2>/dev/null || true
+  
+  local cutoff_date
+  cutoff_date=$(date -d "${keep_months} months ago" +%Y-%m)
+  
+  find "$app_dir" -name "${app_id}_backup_mensal_*.tar.gz" -type f 2>/dev/null | while read -r file; do
+    if [[ $(basename "$file") =~ _([0-9]{4}-[0-9]{2})\.tar\.gz$ ]]; then
+      local file_date="${BASH_REMATCH[1]}"
+      if [[ "$file_date" < "$cutoff_date" ]]; then
+        log_info "Removendo backup antigo: $(basename "$file") (${file_date})"
+        rm -f "$file"
+      fi
+    fi
+  done
 }
 
 # ============================================================================
@@ -121,9 +160,13 @@ process_conf() {
     return 1
   fi
 
+  if [[ ${#ITEMS[@]} -eq 0 ]]; then
+    echo "Configuração inválida (ITEMS vazio): ${conf_file}" >&2
+    return 1
+  fi
+
   local APP_DIR="${BACKUP_ROOT}/${APP_ID}_arquivos"
   local BACKUP_DIR="${APP_DIR}/backup_atual"
-  local MENSAL_ZIP="${APP_DIR}/${APP_ID}_backup_mensal_$(date +%Y-%m).zip"
   local HASH_FILE="${APP_DIR}/hash.sha256"
   local STATE_FILE="${APP_DIR}/estado.json"
   local LOCK_FILE="${APP_DIR}/backup.lock"
@@ -168,7 +211,7 @@ process_conf() {
     # ========================================================================
     # VERIFICAÇÃO: Espaço em disco
     # ========================================================================
-    if ! check_disk_space "$APP_DIR" 1024 "$EMAIL_TO" "$APP_NAME"; then
+    if ! check_disk_space "$APP_DIR" "ITEMS" "$EMAIL_TO" "$APP_NAME"; then
       log_error "Backup abortado: espaço insuficiente"
       trap - ERR
       release_lock "$LOCK_FILE"
@@ -243,13 +286,6 @@ process_conf() {
     
     if ! mkdir -p "$BACKUP_DIR_NEW"; then
       log_error "Falha ao criar diretório temporário"
-      trap - ERR
-      release_lock "$LOCK_FILE"
-      return 1
-    fi
-    
-    if [[ ${#ITEMS[@]} -eq 0 ]]; then
-      log_error "Array ITEMS vazio"
       trap - ERR
       release_lock "$LOCK_FILE"
       return 1

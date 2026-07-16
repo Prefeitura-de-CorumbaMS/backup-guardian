@@ -2,7 +2,7 @@
 
 Sistema automatizado de backup incremental para servidores Debian Linux, com detecção inteligente de mudanças por hash SHA256, backup diário sem compressão para acesso rápido, arquivamento mensal automático e notificações detalhadas por e-mail.
 
-## �️ Requisitos e Compatibilidade
+## Requisitos e Compatibilidade
 
 **Sistema Operacional:**
 - ✅ **Linux (Debian/Ubuntu)** - Totalmente suportado e testado
@@ -22,7 +22,7 @@ Sistema automatizado de backup incremental para servidores Debian Linux, com det
 - Instalação requer `root` (sudo)
 - Execução automática via systemd
 
-## �📑 Índice
+## 📑 Índice
 
 - [Características Principais](#-características-principais)
 - [Como Funciona](#-como-funciona)
