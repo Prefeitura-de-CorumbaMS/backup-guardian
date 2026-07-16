@@ -1,0 +1,28 @@
+# Modelo de configuração do msmtp para envio de e-mails via Gmail/Google Workspace.
+#
+# Como usar:
+#   1. Copie este arquivo para /etc/msmtprc:
+#        sudo cp conf/msmtprc.gmail.example /etc/msmtprc
+#        sudo chmod 600 /etc/msmtprc
+#   2. Gere uma "Senha de app" na sua conta Google:
+#        https://myaccount.google.com/apppasswords
+#      (Requer verificação em duas etapas ativada na conta.)
+#   3. Edite /etc/msmtprc e substitua SEU_EMAIL@gmail.com e SENHA_DE_APP_AQUI.
+#   4. Teste o envio:
+#        echo "teste" | mail -s "Teste Backup Guardian" destinatario@example.com
+
+defaults
+auth           on
+tls            on
+tls_starttls   on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile        /var/log/msmtp.log
+
+account        gmail
+host           smtp.gmail.com
+port           587
+from           SEU_EMAIL@gmail.com
+user           SEU_EMAIL@gmail.com
+password       SENHA_DE_APP_AQUI
+
+account default : gmail

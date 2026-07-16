@@ -1,0 +1,27 @@
+# Modelo para adicionar uma nova aplicação ao Backup Guardian.
+# Copie este arquivo para /etc/backup-guardian/conf.d/<nome>.conf
+# Nenhuma alteração de código é necessária.
+#
+# IMPORTANTE: Este arquivo é versionado no git e NÃO deve conter informações sensíveis.
+# Todas as configurações (APP_NAME, APP_ID, caminhos, e-mail, etc.) devem ficar
+# no arquivo "<nome>.env" ao lado deste (não versionado).
+
+ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/minha_app.env"
+if [[ -f "$ENV_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+else
+  echo "Arquivo não encontrado: ${ENV_FILE}. Crie-o a partir de env.example." >&2
+  return 1 2>/dev/null || exit 1
+fi
+
+# Validar variáveis obrigatórias do .env
+: "${APP_NAME:?Defina APP_NAME no arquivo .env}"
+: "${APP_ID:?Defina APP_ID no arquivo .env}"
+: "${BACKUP_ROOT:?Defina BACKUP_ROOT no arquivo .env}"
+: "${GROUP:?Defina GROUP no arquivo .env}"
+: "${EMAIL_TO:?Defina EMAIL_TO no arquivo .env}"
+: "${ITEMS:?Defina array ITEMS no arquivo .env}"
+
+# Valores padrão (podem ser sobrescritos no .env)
+DIR_PERMS="${DIR_PERMS:-2775}"

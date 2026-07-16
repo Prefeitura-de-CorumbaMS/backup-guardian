@@ -1,0 +1,8 @@
+[Unit]
+Description=Backup Guardian - execucao de backup automatizado
+After=network.target
+
+[Service]
+Type=oneshot
+Environment=BACKUP_GUARDIAN_CONF_DIR={{CONF_DIR}}
+ExecStart={{INSTALL_DIR}}/scripts/backup.sh

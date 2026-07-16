@@ -1,0 +1,9 @@
+# Backup Guardian - arquivos com dados sensíveis que NUNCA devem ir para o git.
+# Caminhos reais de servidor, destinatários de e-mail e credenciais ficam nestes
+# arquivos .env locais (não versionados). Apenas os *.env.example são versionados.
+conf/*.env
+!conf/*.env.example
+
+# Configuração real de SMTP, caso alguém a coloque dentro do repositório por engano.
+msmtprc
+/etc/msmtprc

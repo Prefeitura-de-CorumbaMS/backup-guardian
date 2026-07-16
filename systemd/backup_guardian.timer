@@ -1,0 +1,9 @@
+[Unit]
+Description=Executa o Backup Guardian diariamente a 00:00
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
