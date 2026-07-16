@@ -165,6 +165,16 @@ process_conf() {
     return 1
   fi
 
+  if [[ ! -d "$BACKUP_ROOT" ]]; then
+    echo "Configuração inválida (BACKUP_ROOT não existe): ${BACKUP_ROOT}" >&2
+    return 1
+  fi
+
+  if [[ ! -w "$BACKUP_ROOT" ]]; then
+    echo "Configuração inválida (BACKUP_ROOT não é gravável): ${BACKUP_ROOT}" >&2
+    return 1
+  fi
+
   local APP_DIR="${BACKUP_ROOT}/${APP_ID}_arquivos"
   local BACKUP_DIR="${APP_DIR}/backup_atual"
   local HASH_FILE="${APP_DIR}/hash.sha256"
@@ -404,7 +414,7 @@ main() {
   for conf in "$CONF_DIR"/*.conf; do
     [[ -e "$conf" ]] || continue
     found=1
-    if ! ( process_conf "$conf" ); then
+    if ! process_conf "$conf"; then
       status=1
     fi
   done

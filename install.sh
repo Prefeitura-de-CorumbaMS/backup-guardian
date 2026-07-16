@@ -18,7 +18,7 @@ require_root() {
 }
 
 check_dependencies() {
-  local deps=(bash zip unzip jq sha256sum find systemctl)
+  local deps=(bash tar zip unzip jq sha256sum find awk sed du df date systemctl)
   local missing=()
   local dep
   for dep in "${deps[@]}"; do
@@ -31,7 +31,7 @@ check_dependencies() {
   fi
   if [[ "${#missing[@]}" -gt 0 ]]; then
     echo "Dependências ausentes: ${missing[*]}" >&2
-    echo "Instale com: apt-get install zip unzip jq mailutils" >&2
+    echo "Instale com: apt-get install tar zip unzip jq mailutils coreutils" >&2
     exit 1
   fi
 }
