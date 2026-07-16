@@ -380,23 +380,30 @@ process_conf() {
     # ========================================================================
     if [[ $erros -gt 0 ]]; then
       log_error "Backup parcial: ${erros} erro(s). ${items_copiados}/${total_items} itens."
+      log_info "Hash NÃO atualizado - forçará retry na próxima execução"
+      
       if [[ -n "$EMAIL_TO" ]]; then
         send_partial_backup_mail "$EMAIL_TO" "$APP_NAME" "$items_copiados" "$total_items" "$erros" "$ERRO_LOG"
       fi
+      
+      write_state "$STATE_FILE" \
+        "ultimoBackup:str=$(timestamp)" \
+        "contadorSemMudanca:num=0" \
+        "aguardando:bool=false"
     else
       log_info "Backup concluído: ${items_copiados}/${total_items} itens."
-    fi
-    
-    echo "$new_hash" > "$HASH_FILE"
-    
-    write_state "$STATE_FILE" \
-      "ultimoHash:str=${new_hash}" \
-      "ultimoBackup:str=$(timestamp)" \
-      "contadorSemMudanca:num=0" \
-      "aguardando:bool=false"
-    
-    if [[ -n "$EMAIL_TO" && $erros -eq 0 ]]; then
-      send_backup_mail "$EMAIL_TO" "$APP_NAME" "$BACKUP_DIR_OLD" "$items_copiados" "$total_items"
+      
+      echo "$new_hash" > "$HASH_FILE"
+      
+      write_state "$STATE_FILE" \
+        "ultimoHash:str=${new_hash}" \
+        "ultimoBackup:str=$(timestamp)" \
+        "contadorSemMudanca:num=0" \
+        "aguardando:bool=false"
+      
+      if [[ -n "$EMAIL_TO" ]]; then
+        send_backup_mail "$EMAIL_TO" "$APP_NAME" "$BACKUP_DIR_OLD" "$items_copiados" "$total_items"
+      fi
     fi
   fi
 

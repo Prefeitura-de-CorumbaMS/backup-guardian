@@ -53,6 +53,29 @@ main() {
 
   mkdir -p "$CONF_DIR"
   local conf dest env_src env_dest
+  local missing_env=()
+  
+  for conf in "$SCRIPT_SOURCE_DIR"/conf/*.conf; do
+    [[ -e "$conf" ]] || continue
+    
+    env_src="${conf%.conf}.env"
+    if [[ ! -e "$env_src" ]]; then
+      missing_env+=("$(basename "$env_src")")
+    fi
+  done
+  
+  if [[ ${#missing_env[@]} -gt 0 ]]; then
+    echo "ERRO: Arquivos .env ausentes: ${missing_env[*]}" >&2
+    echo "" >&2
+    echo "Para cada arquivo .conf, você precisa criar o .env correspondente:" >&2
+    for env_file in "${missing_env[@]}"; do
+      echo "  cp conf/env.example conf/${env_file}" >&2
+      echo "  nano conf/${env_file}  # Preencha as configurações" >&2
+    done
+    echo "" >&2
+    exit 1
+  fi
+  
   for conf in "$SCRIPT_SOURCE_DIR"/conf/*.conf; do
     [[ -e "$conf" ]] || continue
     dest="$CONF_DIR/$(basename "$conf")"
