@@ -121,6 +121,43 @@ retry_with_backoff() {
   return 1
 }
 
+validate_archive() {
+  local archive="$1"
+  local validation_log="${archive}.validation.log"
+  
+  if [[ ! -s "$archive" ]]; then
+    log_error "Arquivo vazio ou inexistente: $(basename "$archive")"
+    return 1
+  fi
+  
+  if ! tar -tzf "$archive" > "$validation_log" 2>&1; then
+    log_error "Falha ao validar arquivo: $(basename "$archive")"
+    cat "$validation_log" >> "$ERRO_LOG" 2>/dev/null || true
+    rm -f "$validation_log"
+    return 1
+  fi
+  
+  local file_count
+  file_count=$(wc -l < "$validation_log")
+  rm -f "$validation_log"
+  
+  if [[ $file_count -eq 0 ]]; then
+    log_error "Arquivo não contém nenhum item"
+    return 1
+  fi
+  
+  log_info "Validação OK: ${file_count} itens no arquivo"
+  
+  local checksum_file="${archive}.sha256"
+  if sha256sum "$archive" > "$checksum_file" 2>/dev/null; then
+    log_info "Checksum gerado: $(basename "$checksum_file")"
+  else
+    log_error "Falha ao gerar checksum (não crítico)"
+  fi
+  
+  return 0
+}
+
 cleanup_old_archives() {
   local app_dir="$1"
   local app_id="$2"
@@ -191,7 +228,24 @@ process_conf() {
     return 1
   fi
 
+  cleanup_on_exit() {
+    local exit_code=$?
+    trap - ERR EXIT INT TERM
+    
+    if [[ $exit_code -ne 0 ]]; then
+      log_error "Backup interrompido (exit code: ${exit_code})"
+      
+      if [[ -d "$BACKUP_DIR_NEW" ]]; then
+        log_info "Removendo backup incompleto: backup_novo/"
+        rm -rf "$BACKUP_DIR_NEW"
+      fi
+    fi
+    
+    release_lock "$LOCK_FILE"
+  }
+
   trap 'on_error "$APP_ID" "$EMAIL_TO" "$LINENO"' ERR
+  trap 'cleanup_on_exit' EXIT INT TERM
 
   init_state "$STATE_FILE"
 
@@ -213,8 +267,6 @@ process_conf() {
     
     if [[ "$ultimo_backup" == "$hoje"* ]]; then
       log_info "Backup já executado hoje. Operação idempotente - pulando."
-      trap - ERR
-      release_lock "$LOCK_FILE"
       return 0
     fi
     
@@ -223,8 +275,6 @@ process_conf() {
     # ========================================================================
     if ! check_disk_space "$APP_DIR" "ITEMS" "$EMAIL_TO" "$APP_NAME"; then
       log_error "Backup abortado: espaço insuficiente"
-      trap - ERR
-      release_lock "$LOCK_FILE"
       return 1
     fi
     
@@ -235,43 +285,41 @@ process_conf() {
     mes_atual=$(current_month)
     mes_registrado=$(read_state_field "$STATE_FILE" mesBackup)
     
-    local criar_zip_mensal=false
-    local zip_mensal=""
+    local criar_arquivo_mensal=false
+    local archive_mensal=""
     
     if [[ -n "$mes_registrado" && "$mes_registrado" != "$mes_atual" ]]; then
-      criar_zip_mensal=true
+      criar_arquivo_mensal=true
       local mes_anterior
       mes_anterior=$(get_previous_month)
-      zip_mensal="${APP_DIR}/${APP_ID}_backup_mensal_${mes_anterior}.tar.gz"
+      archive_mensal="${APP_DIR}/${APP_ID}_backup_mensal_${mes_anterior}.tar.gz"
       log_info "Mudança de mês: ${mes_registrado} → ${mes_atual}"
     fi
     
     # ========================================================================
-    # PASSO 2: CRIAR ZIP MENSAL (com dados do mês anterior)
+    # PASSO 2: CRIAR ARQUIVO MENSAL (tar.gz com dados do mês anterior)
     # ========================================================================
     local BACKUP_DIR_OLD="${APP_DIR}/backup_atual"
     
-    if [[ "$criar_zip_mensal" == true ]]; then
+    if [[ "$criar_arquivo_mensal" == true ]]; then
       if [[ -d "$BACKUP_DIR_OLD" ]]; then
-        log_info "Criando ZIP mensal: $(basename "$zip_mensal")"
+        log_info "Criando arquivo mensal: $(basename "$archive_mensal")"
         
-        local zip_temp="${zip_mensal}.tmp"
+        local archive_temp="${archive_mensal}.tmp"
         
-        # Criar ZIP usando caminhos absolutos (sem cd)
-        # -j: junk paths (não inclui estrutura de diretórios absolutos)
-        # Alternativa: usar tar que suporta -C (change directory) de forma segura
-        if tar -czf "$zip_temp" -C "$BACKUP_DIR_OLD" . 2>/dev/null; then
-          # Validar arquivo criado
-          if tar -tzf "$zip_temp" >/dev/null 2>&1; then
-            mv -f "$zip_temp" "$zip_mensal"
-            log_info "ZIP mensal criado: $(basename "$zip_mensal") ($(du -h "$zip_mensal" | cut -f1))"
+        if tar -czf "$archive_temp" -C "$BACKUP_DIR_OLD" . 2>/dev/null; then
+          if validate_archive "$archive_temp"; then
+            mv -f "$archive_temp" "$archive_mensal"
+            local size
+            size=$(du -h "$archive_mensal" | cut -f1)
+            log_info "Arquivo mensal criado: $(basename "$archive_mensal") (${size})"
           else
-            log_error "ZIP falhou na validação de integridade"
-            rm -f "$zip_temp"
+            log_error "Arquivo falhou na validação de integridade"
+            rm -f "$archive_temp"
           fi
         else
-          log_error "Falha ao criar ZIP mensal"
-          rm -f "$zip_temp"
+          log_error "Falha ao criar arquivo mensal (tar.gz)"
+          rm -f "$archive_temp"
         fi
         
         cleanup_old_archives "$APP_DIR" "$APP_ID"
@@ -296,8 +344,6 @@ process_conf() {
     
     if ! mkdir -p "$BACKUP_DIR_NEW"; then
       log_error "Falha ao criar diretório temporário"
-      trap - ERR
-      release_lock "$LOCK_FILE"
       return 1
     fi
     
@@ -347,8 +393,6 @@ process_conf() {
     if [[ $items_copiados -eq 0 ]]; then
       log_error "CRÍTICO: Nenhum item copiado"
       rm -rf "$BACKUP_DIR_NEW"
-      trap - ERR
-      release_lock "$LOCK_FILE"
       return 1
     fi
     
@@ -359,8 +403,6 @@ process_conf() {
       mv "$BACKUP_DIR_OLD" "$BACKUP_DIR_TRASH" || {
         log_error "Falha no swap atômico"
         rm -rf "$BACKUP_DIR_NEW"
-        trap - ERR
-        release_lock "$LOCK_FILE"
         return 1
       }
     fi
@@ -368,8 +410,6 @@ process_conf() {
     mv "$BACKUP_DIR_NEW" "$BACKUP_DIR_OLD" || {
       log_error "Falha no swap atômico"
       [[ -d "$BACKUP_DIR_TRASH" ]] && mv "$BACKUP_DIR_TRASH" "$BACKUP_DIR_OLD"
-      trap - ERR
-      release_lock "$LOCK_FILE"
       return 1
     }
     
@@ -406,9 +446,6 @@ process_conf() {
       fi
     fi
   fi
-
-  trap - ERR
-  release_lock "$LOCK_FILE"
 }
 
 main() {
