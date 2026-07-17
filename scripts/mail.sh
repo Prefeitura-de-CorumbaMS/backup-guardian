@@ -29,7 +29,17 @@ send_backup_mail() {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Backup Guardian - Sistema Automatizado de Backup
 "
-  echo "$body" | mail -s "$subject" "$to" || true
+  local mail_output
+  if mail_output=$(echo "$body" | mail -s "$subject" "$to" 2>&1); then
+    log_info "E-mail de backup enviado para ${to}"
+    return 0
+  else
+    log_error "FALHA CRÍTICA ao enviar e-mail para ${to}"
+    log_error "Erro SMTP: ${mail_output}"
+    log_error "Verifique: /etc/msmtprc, credenciais SMTP, conectividade de rede"
+    log_error "Sistema ABORTADO para evitar acúmulo de processos travados"
+    return 1
+  fi
 }
 
 send_error_mail() {
@@ -55,7 +65,16 @@ ${erro}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Backup Guardian - Sistema Automatizado de Backup
 "
-  echo "$body" | mail -s "$subject" "$to" || true
+  local mail_output
+  if mail_output=$(echo "$body" | mail -s "$subject" "$to" 2>&1); then
+    log_info "E-mail de erro enviado para ${to}"
+    return 0
+  else
+    log_error "FALHA CRÍTICA ao enviar e-mail de erro para ${to}"
+    log_error "Erro SMTP: ${mail_output}"
+    log_error "Sistema ABORTADO para evitar acúmulo de processos travados"
+    return 1
+  fi
 }
 
 send_disk_space_alert() {
@@ -107,7 +126,16 @@ send_disk_space_alert() {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Backup Guardian - Sistema Automatizado de Backup
 "
-  echo "$body" | mail -s "$subject" "$to" || true
+  local mail_output
+  if mail_output=$(echo "$body" | mail -s "$subject" "$to" 2>&1); then
+    log_info "Alerta de espaço enviado para ${to}"
+    return 0
+  else
+    log_error "FALHA CRÍTICA ao enviar alerta de espaço para ${to}"
+    log_error "Erro SMTP: ${mail_output}"
+    log_error "Sistema ABORTADO para evitar acúmulo de processos travados"
+    return 1
+  fi
 }
 
 send_partial_backup_mail() {
@@ -142,5 +170,14 @@ send_partial_backup_mail() {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Backup Guardian - Sistema Automatizado de Backup
 "
-  echo "$body" | mail -s "$subject" "$to" || true
+  local mail_output
+  if mail_output=$(echo "$body" | mail -s "$subject" "$to" 2>&1); then
+    log_info "E-mail de backup parcial enviado para ${to}"
+    return 0
+  else
+    log_error "FALHA CRÍTICA ao enviar e-mail de backup parcial para ${to}"
+    log_error "Erro SMTP: ${mail_output}"
+    log_error "Sistema ABORTADO para evitar acúmulo de processos travados"
+    return 1
+  fi
 }
