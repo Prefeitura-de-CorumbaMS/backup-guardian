@@ -5,7 +5,7 @@ set -euo pipefail
 init_state() {
   local file="$1"
   if [[ ! -f "$file" ]]; then
-    jq -n '{ultimoHash:"", ultimoBackup:"", mesBackup:"", contadorSemMudanca:0, aguardando:false}' > "$file"
+    jq -n '{ultimoHash:"", ultimoBackup:"", mesBackup:""}' > "$file"
   fi
 }
 

@@ -144,7 +144,7 @@ send_partial_backup_mail() {
   local items_copiados="$3"
   local total_items="$4"
   local erros="$5"
-  local log_file="${6:-/var/log/backup-guardian/erro.log}"
+  local log_file="${6:-${BACKUP_LOG:-/backups/backup.log}}"
   
   local subject="⚠️  [AVISO] Backup Parcial - ${app_name}"
   local body

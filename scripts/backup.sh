@@ -123,39 +123,45 @@ retry_with_backoff() {
 
 validate_archive() {
   local archive="$1"
-  local validation_log="${archive}.validation.log"
   
   if [[ ! -s "$archive" ]]; then
     log_error "Arquivo vazio ou inexistente: $(basename "$archive")"
     return 1
   fi
   
-  if ! tar -tzf "$archive" > "$validation_log" 2>&1; then
-    log_error "Falha ao validar arquivo: $(basename "$archive")"
-    cat "$validation_log" >> "$ERRO_LOG" 2>/dev/null || true
-    rm -f "$validation_log"
+  local file_count
+  file_count=$(tar -tzf "$archive" 2>/dev/null | wc -l)
+  
+  if [[ $? -ne 0 ]]; then
+    log_error "Falha ao validar integridade do arquivo: $(basename "$archive")"
     return 1
   fi
-  
-  local file_count
-  file_count=$(wc -l < "$validation_log")
-  rm -f "$validation_log"
   
   if [[ $file_count -eq 0 ]]; then
-    log_error "Arquivo não contém nenhum item"
+    log_error "Arquivo não contém nenhum item: $(basename "$archive")"
     return 1
   fi
   
-  log_info "Validação OK: ${file_count} itens no arquivo"
-  
-  local checksum_file="${archive}.sha256"
-  if sha256sum "$archive" > "$checksum_file" 2>/dev/null; then
-    log_info "Checksum gerado: $(basename "$checksum_file")"
-  else
-    log_error "Falha ao gerar checksum (não crítico)"
-  fi
-  
+  log_info "Arquivo validado com sucesso: $(basename "$archive") - ${file_count} itens"
   return 0
+}
+
+cleanup_temp_files() {
+  local app_dir="$1"
+  
+  find "$app_dir" -name "*.tmp" -type f -mtime +1 2>/dev/null | while read -r tmpfile; do
+    log_info "Removendo arquivo temporário órfão: $(basename "$tmpfile")"
+    rm -f "$tmpfile"
+  done
+  
+  if [[ -d "${app_dir}/backup_temp" ]]; then
+    local temp_age_hours
+    temp_age_hours=$(( ($(date +%s) - $(stat -c %Y "${app_dir}/backup_temp" 2>/dev/null || echo 0)) / 3600 ))
+    if [[ $temp_age_hours -gt 24 ]]; then
+      log_info "Removendo backup_temp/ órfão (${temp_age_hours}h)"
+      rm -rf "${app_dir}/backup_temp"
+    fi
+  fi
 }
 
 cleanup_old_archives() {
@@ -172,7 +178,7 @@ cleanup_old_archives() {
     if [[ $(basename "$file") =~ _([0-9]{4}-[0-9]{2})\.tar\.gz$ ]]; then
       local file_date="${BASH_REMATCH[1]}"
       if [[ "$file_date" < "$cutoff_date" ]]; then
-        log_info "Removendo backup antigo: $(basename "$file") (${file_date})"
+        log_info "Removendo backup mensal antigo: $(basename "$file") (${file_date})"
         rm -f "$file"
       fi
     fi
@@ -213,15 +219,16 @@ process_conf() {
   fi
 
   local APP_DIR="${BACKUP_ROOT}/${APP_ID}_arquivos"
-  local BACKUP_DIR="${APP_DIR}/backup_atual"
+  local BACKUP_DIARIO="${APP_DIR}/backup_diario"
   local HASH_FILE="${APP_DIR}/hash.sha256"
   local STATE_FILE="${APP_DIR}/estado.json"
   local LOCK_FILE="${APP_DIR}/backup.lock"
 
   export BACKUP_LOG="${APP_DIR}/backup.log"
-  export ERRO_LOG="${APP_DIR}/erro.log"
 
   ensure_dir "$APP_DIR" "$DIR_PERMS" "$GROUP"
+  
+  cleanup_temp_files "$APP_DIR"
 
   if ! acquire_lock "$LOCK_FILE"; then
     log_error "Lock ativo em ${LOCK_FILE}. Execução abortada para ${APP_ID}."
@@ -235,9 +242,10 @@ process_conf() {
     if [[ $exit_code -ne 0 ]]; then
       log_error "Backup interrompido (exit code: ${exit_code})"
       
-      if [[ -d "$BACKUP_DIR_NEW" ]]; then
-        log_info "Removendo backup incompleto: backup_novo/"
-        rm -rf "$BACKUP_DIR_NEW"
+      local BACKUP_TEMP="${APP_DIR}/backup_temp"
+      if [[ -d "$BACKUP_TEMP" && "$BACKUP_TEMP" == *"/backup_temp" && -n "$BACKUP_TEMP" ]]; then
+        log_info "Removendo backup incompleto: backup_temp/"
+        rm -rf "$BACKUP_TEMP"
       fi
     fi
     
@@ -257,19 +265,6 @@ process_conf() {
   if [[ -n "$old_hash" && "$old_hash" == "$new_hash" ]]; then
     handle_no_change "$STATE_FILE"
   else
-    # ========================================================================
-    # VERIFICAÇÃO: Idempotência (já rodou hoje?)
-    # ========================================================================
-    local ultimo_backup
-    ultimo_backup=$(read_state_field "$STATE_FILE" ultimoBackup)
-    local hoje
-    hoje=$(date +%Y-%m-%d)
-    
-    if [[ "$ultimo_backup" == "$hoje"* ]]; then
-      log_info "Backup já executado hoje. Operação idempotente - pulando."
-      return 0
-    fi
-    
     # ========================================================================
     # VERIFICAÇÃO: Espaço em disco
     # ========================================================================
@@ -297,32 +292,71 @@ process_conf() {
     fi
     
     # ========================================================================
-    # PASSO 2: CRIAR ARQUIVO MENSAL (tar.gz com dados do mês anterior)
+    # PASSO 2: CRIAR ARQUIVO MENSAL (tar.gz do Último backup do mês anterior)
     # ========================================================================
-    local BACKUP_DIR_OLD="${APP_DIR}/backup_atual"
-    
     if [[ "$criar_arquivo_mensal" == true ]]; then
-      if [[ -d "$BACKUP_DIR_OLD" ]]; then
-        log_info "Criando arquivo mensal: $(basename "$archive_mensal")"
+      if [[ -d "$BACKUP_DIARIO" ]]; then
+        log_info "Mudança de mês detectada: ${mes_registrado} → ${mes_atual}"
         
+        # Verificar espaço para ZIP mensal
+        local backup_dir_size
+        backup_dir_size=$(du -sm "$BACKUP_DIARIO" | cut -f1)
+        local estimated_zip_size=$((backup_dir_size / 2))
+        local zip_overhead=$((estimated_zip_size + backup_dir_size))
+        
+        local available_mb
+        available_mb=$(df -BM "$APP_DIR" | awk 'NR==2 {print $4}' | sed 's/M//')
+        
+        if [[ $available_mb -lt $((zip_overhead + MIN_FREE_SPACE_MB)) ]]; then
+          log_error "Espaço insuficiente para criar ZIP mensal"
+          log_error "Necessário: $((zip_overhead + MIN_FREE_SPACE_MB)) MB"
+          log_error "Disponível: ${available_mb} MB"
+          log_error "Pulando criação de ZIP mensal. Backup diário continuará."
+          
+          if [[ -n "$EMAIL_TO" ]]; then
+            send_disk_space_alert "$EMAIL_TO" "$APP_NAME" "$APP_DIR" "$available_mb" \
+              "$((zip_overhead + MIN_FREE_SPACE_MB))" "$backup_dir_size" "$MIN_FREE_SPACE_MB"
+          fi
+          
+          criar_arquivo_mensal=false
+        else
+          log_info "Criando ZIP mensal do mês anterior: $(basename "$archive_mensal")"
+        fi
+      fi
+      
+      if [[ "$criar_arquivo_mensal" == true && -d "$BACKUP_DIARIO" ]]; then
         local archive_temp="${archive_mensal}.tmp"
         
-        if tar -czf "$archive_temp" -C "$BACKUP_DIR_OLD" . 2>/dev/null; then
+        if tar -czf "$archive_temp" -C "$BACKUP_DIARIO" . 2>/dev/null; then
           if validate_archive "$archive_temp"; then
-            mv -f "$archive_temp" "$archive_mensal"
-            local size
-            size=$(du -h "$archive_mensal" | cut -f1)
-            log_info "Arquivo mensal criado: $(basename "$archive_mensal") (${size})"
+            if mv -f "$archive_temp" "$archive_mensal"; then
+              local size
+              size=$(du -h "$archive_mensal" | cut -f1)
+              log_info "ZIP mensal criado com sucesso: $(basename "$archive_mensal") (${size})"
+              
+              # Cleanup de ZIPs antigos ANTES de deletar backup_diario/
+              cleanup_old_archives "$APP_DIR" "$APP_ID"
+              
+              # DELETAR backup_diario/ APENAS após sucesso completo
+              log_info "Deletando backup diário (já preservado no ZIP mensal)"
+              rm -rf "$BACKUP_DIARIO"
+            else
+              log_error "Falha ao mover ZIP temporário para destino final"
+              rm -f "$archive_temp"
+              return 1
+            fi
           else
-            log_error "Arquivo falhou na validação de integridade"
+            log_error "ZIP falhou na validação de integridade"
             rm -f "$archive_temp"
+            return 1
           fi
         else
-          log_error "Falha ao criar arquivo mensal (tar.gz)"
+          log_error "Falha ao criar ZIP mensal (tar.gz)"
           rm -f "$archive_temp"
+          return 1
         fi
-        
-        cleanup_old_archives "$APP_DIR" "$APP_ID"
+      else
+        log_info "Backup diário não existe. Pulando criação de ZIP mensal."
       fi
       
       write_state "$STATE_FILE" "mesBackup:str=${mes_atual}"
@@ -332,17 +366,13 @@ process_conf() {
     fi
     
     # ========================================================================
-    # PASSO 3: BACKUP DIÁRIO (Atomic Swap Pattern)
+    # PASSO 3: BACKUP DIÁRIO (Substitui backup_diario/)
     # ========================================================================
     log_info "Iniciando backup diário..."
     
-    local BACKUP_DIR_NEW="${APP_DIR}/backup_novo"
-    local BACKUP_DIR_TRASH="${APP_DIR}/backup_antigo"
+    local BACKUP_TEMP="${APP_DIR}/backup_temp"
     
-    [[ -d "$BACKUP_DIR_NEW" ]] && rm -rf "$BACKUP_DIR_NEW"
-    [[ -d "$BACKUP_DIR_TRASH" ]] && rm -rf "$BACKUP_DIR_TRASH"
-    
-    if ! mkdir -p "$BACKUP_DIR_NEW"; then
+    if ! mkdir -p "$BACKUP_TEMP"; then
       log_error "Falha ao criar diretório temporário"
       return 1
     fi
@@ -374,7 +404,7 @@ process_conf() {
         continue
       fi
       
-      dest_path="${BACKUP_DIR_NEW}/${destino}"
+      dest_path="${BACKUP_TEMP}/${destino}"
       
       if ! mkdir -p "$(dirname "$dest_path")"; then
         log_error "Falha ao criar diretório: $(dirname "$dest_path")"
@@ -392,58 +422,54 @@ process_conf() {
     
     if [[ $items_copiados -eq 0 ]]; then
       log_error "CRÍTICO: Nenhum item copiado"
-      rm -rf "$BACKUP_DIR_NEW"
       return 1
     fi
     
     # ========================================================================
-    # PASSO 4: SWAP ATÔMICO
+    # PASSO 4: ATUALIZAR BACKUP DIÁRIO (Substitui backup_diario/)
     # ========================================================================
-    if [[ -d "$BACKUP_DIR_OLD" ]]; then
-      mv "$BACKUP_DIR_OLD" "$BACKUP_DIR_TRASH" || {
-        log_error "Falha no swap atômico"
-        rm -rf "$BACKUP_DIR_NEW"
-        return 1
-      }
+    
+    # BUG #9 CORRIGIDO: NÃO fazer swap se houver erros
+    if [[ $erros -gt 0 ]]; then
+      log_error "Backup parcial rejeitado: ${erros} erro(s). ${items_copiados}/${total_items} itens."
+      log_error "Backup anterior PRESERVADO (não sobrescrito com backup incompleto)"
+      log_info "Hash NÃO atualizado - forçará retry na próxima execução"
+      
+      rm -rf "$BACKUP_TEMP"
+      
+      if [[ -n "$EMAIL_TO" ]]; then
+        send_partial_backup_mail "$EMAIL_TO" "$APP_NAME" "$items_copiados" "$total_items" "$erros" "$BACKUP_LOG"
+      fi
+      
+      write_state "$STATE_FILE" "ultimoBackup:str=$(timestamp)"
+      return 1
     fi
     
-    mv "$BACKUP_DIR_NEW" "$BACKUP_DIR_OLD" || {
-      log_error "Falha no swap atômico"
-      [[ -d "$BACKUP_DIR_TRASH" ]] && mv "$BACKUP_DIR_TRASH" "$BACKUP_DIR_OLD"
+    # Backup completo: substituir backup_diario/
+    log_info "Backup completo: ${items_copiados}/${total_items} itens copiados"
+    
+    if [[ -d "$BACKUP_DIARIO" ]]; then
+      rm -rf "$BACKUP_DIARIO"
+    fi
+    
+    mv "$BACKUP_TEMP" "$BACKUP_DIARIO" || {
+      log_error "Falha ao mover backup_temp para backup_diario"
       return 1
     }
-    
-    [[ -d "$BACKUP_DIR_TRASH" ]] && rm -rf "$BACKUP_DIR_TRASH"
     
     # ========================================================================
     # PASSO 5: ATUALIZAR ESTADO E NOTIFICAR
     # ========================================================================
-    if [[ $erros -gt 0 ]]; then
-      log_error "Backup parcial: ${erros} erro(s). ${items_copiados}/${total_items} itens."
-      log_info "Hash NÃO atualizado - forçará retry na próxima execução"
-      
-      if [[ -n "$EMAIL_TO" ]]; then
-        send_partial_backup_mail "$EMAIL_TO" "$APP_NAME" "$items_copiados" "$total_items" "$erros" "$ERRO_LOG"
-      fi
-      
-      write_state "$STATE_FILE" \
-        "ultimoBackup:str=$(timestamp)" \
-        "contadorSemMudanca:num=0" \
-        "aguardando:bool=false"
-    else
-      log_info "Backup concluído: ${items_copiados}/${total_items} itens."
-      
-      echo "$new_hash" > "$HASH_FILE"
-      
-      write_state "$STATE_FILE" \
-        "ultimoHash:str=${new_hash}" \
-        "ultimoBackup:str=$(timestamp)" \
-        "contadorSemMudanca:num=0" \
-        "aguardando:bool=false"
-      
-      if [[ -n "$EMAIL_TO" ]]; then
-        send_backup_mail "$EMAIL_TO" "$APP_NAME" "$BACKUP_DIR_OLD" "$items_copiados" "$total_items"
-      fi
+    log_info "Backup concluído com sucesso: ${items_copiados}/${total_items} itens."
+    
+    echo "$new_hash" > "$HASH_FILE"
+    
+    write_state "$STATE_FILE" \
+      "ultimoHash:str=${new_hash}" \
+      "ultimoBackup:str=$(timestamp)"
+    
+    if [[ -n "$EMAIL_TO" ]]; then
+      send_backup_mail "$EMAIL_TO" "$APP_NAME" "$BACKUP_DIARIO" "$items_copiados" "$total_items"
     fi
   fi
 }

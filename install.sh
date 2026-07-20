@@ -101,16 +101,28 @@ main() {
 
   cp "$SCRIPT_SOURCE_DIR/systemd/backup_guardian.service" "$SYSTEMD_DIR/backup_guardian.service"
   cp "$SCRIPT_SOURCE_DIR/systemd/backup_guardian.timer" "$SYSTEMD_DIR/backup_guardian.timer"
+  cp "$SCRIPT_SOURCE_DIR/systemd/backup_guardian_healthcheck.service" "$SYSTEMD_DIR/backup_guardian_healthcheck.service"
+  cp "$SCRIPT_SOURCE_DIR/systemd/backup_guardian_healthcheck.timer" "$SYSTEMD_DIR/backup_guardian_healthcheck.timer"
+  
   sed -i "s#{{INSTALL_DIR}}#${INSTALL_DIR}#g" "$SYSTEMD_DIR/backup_guardian.service"
   sed -i "s#{{CONF_DIR}}#${CONF_DIR}#g" "$SYSTEMD_DIR/backup_guardian.service"
+  sed -i "s#{{INSTALL_DIR}}#${INSTALL_DIR}#g" "$SYSTEMD_DIR/backup_guardian_healthcheck.service"
+
+  if [[ -f "$SCRIPT_SOURCE_DIR/logrotate/backup-guardian" ]]; then
+    cp "$SCRIPT_SOURCE_DIR/logrotate/backup-guardian" /etc/logrotate.d/backup-guardian
+    chmod 644 /etc/logrotate.d/backup-guardian
+    echo "Logrotate configurado: /etc/logrotate.d/backup-guardian"
+  fi
 
   systemctl daemon-reload
   systemctl enable backup_guardian.timer
   systemctl start backup_guardian.timer
+  systemctl enable backup_guardian_healthcheck.timer
+  systemctl start backup_guardian_healthcheck.timer
 
-  echo "Executando backup inicial (cria hash, estado.json e backups mensal/corrente)..."
+  echo "Executando backup inicial (cria hash, estado.json e backup diário)..."
   if ! BACKUP_GUARDIAN_CONF_DIR="$CONF_DIR" "$INSTALL_DIR/scripts/backup.sh"; then
-    echo "Aviso: a execução inicial retornou erro. Verifique erro.log em cada diretório de backup." >&2
+    echo "Aviso: a execução inicial retornou erro. Verifique backup.log em cada diretório de backup." >&2
   fi
 
   echo ""

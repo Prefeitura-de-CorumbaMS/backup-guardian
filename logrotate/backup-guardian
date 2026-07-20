@@ -1,0 +1,17 @@
+# Logrotate configuration for Backup Guardian
+# Installed to: /etc/logrotate.d/backup-guardian
+
+/backups/*/backup.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root projetos
+    sharedscripts
+    postrotate
+        # Opcional: enviar notificação se logs muito grandes
+        # systemctl reload backup_guardian.service 2>/dev/null || true
+    endscript
+}
