@@ -84,9 +84,9 @@ check_disk_space() {
 }
 
 get_previous_month() {
-  local year month
-  year=$(date +%Y)
-  month=$(date +%m)
+  local base_month="${1:-$(date +%Y-%m)}"
+  local year="${base_month%-*}"
+  local month="${base_month#*-}"
   month=$((10#$month))
   
   if [[ $month -eq 1 ]]; then
@@ -129,13 +129,15 @@ validate_archive() {
     return 1
   fi
   
-  local file_count
-  file_count=$(tar -tzf "$archive" 2>/dev/null | wc -l)
-  
-  if [[ $? -ne 0 ]]; then
+  # Validar integridade primeiro (separado para capturar exit code correto)
+  if ! tar -tzf "$archive" >/dev/null 2>&1; then
     log_error "Falha ao validar integridade do arquivo: $(basename "$archive")"
     return 1
   fi
+  
+  # Contar arquivos depois
+  local file_count
+  file_count=$(tar -tzf "$archive" 2>/dev/null | wc -l)
   
   if [[ $file_count -eq 0 ]]; then
     log_error "Arquivo não contém nenhum item: $(basename "$archive")"
@@ -151,7 +153,9 @@ cleanup_temp_files() {
   
   find "$app_dir" -name "*.tmp" -type f -mtime +1 2>/dev/null | while read -r tmpfile; do
     log_info "Removendo arquivo temporário órfão: $(basename "$tmpfile")"
-    rm -f "$tmpfile"
+    if ! rm -f "$tmpfile"; then
+      log_error "Falha ao remover arquivo temporário: $(basename "$tmpfile")"
+    fi
   done
   
   if [[ -d "${app_dir}/backup_temp" ]]; then
@@ -159,7 +163,9 @@ cleanup_temp_files() {
     temp_age_hours=$(( ($(date +%s) - $(stat -c %Y "${app_dir}/backup_temp" 2>/dev/null || echo 0)) / 3600 ))
     if [[ $temp_age_hours -gt 24 ]]; then
       log_info "Removendo backup_temp/ órfão (${temp_age_hours}h)"
-      rm -rf "${app_dir}/backup_temp"
+      if ! rm -rf "${app_dir}/backup_temp"; then
+        log_error "Falha ao remover backup_temp/ órfão"
+      fi
     fi
   fi
 }
@@ -167,19 +173,27 @@ cleanup_temp_files() {
 cleanup_old_archives() {
   local app_dir="$1"
   local app_id="$2"
-  local keep_months=12
+  local keep_months="${KEEP_MONTHS:-12}"
   
   log_info "Limpando arquivos mensais com mais de ${keep_months} meses..."
   
   local cutoff_date
   cutoff_date=$(date -d "${keep_months} months ago" +%Y-%m)
   
-  find "$app_dir" -name "${app_id}_backup_mensal_*.tar.gz" -type f 2>/dev/null | while read -r file; do
+  # Usar array em vez de pipe (evita subshell)
+  local files=()
+  while IFS= read -r -d '' file; do
+    files+=("$file")
+  done < <(find "$app_dir" -name "${app_id}_backup_mensal_*.tar.gz" -type f -print0 2>/dev/null)
+  
+  for file in "${files[@]}"; do
     if [[ $(basename "$file") =~ _([0-9]{4}-[0-9]{2})\.tar\.gz$ ]]; then
       local file_date="${BASH_REMATCH[1]}"
       if [[ "$file_date" < "$cutoff_date" ]]; then
         log_info "Removendo backup mensal antigo: $(basename "$file") (${file_date})"
-        rm -f "$file"
+        if ! rm -f "$file"; then
+          log_error "Falha ao remover: $(basename "$file")"
+        fi
       fi
     fi
   done
@@ -286,7 +300,7 @@ process_conf() {
     if [[ -n "$mes_registrado" && "$mes_registrado" != "$mes_atual" ]]; then
       criar_arquivo_mensal=true
       local mes_anterior
-      mes_anterior=$(get_previous_month)
+      mes_anterior=$(get_previous_month "$mes_registrado")
       archive_mensal="${APP_DIR}/${APP_ID}_backup_mensal_${mes_anterior}.tar.gz"
       log_info "Mudança de mês: ${mes_registrado} → ${mes_atual}"
     fi
@@ -358,11 +372,8 @@ process_conf() {
       else
         log_info "Backup diário não existe. Pulando criação de ZIP mensal."
       fi
-      
-      write_state "$STATE_FILE" "mesBackup:str=${mes_atual}"
     elif [[ -z "$mes_registrado" ]]; then
       log_info "Primeira execução. Mês inicial: ${mes_atual}"
-      write_state "$STATE_FILE" "mesBackup:str=${mes_atual}"
     fi
     
     # ========================================================================
@@ -464,9 +475,17 @@ process_conf() {
     
     echo "$new_hash" > "$HASH_FILE"
     
-    write_state "$STATE_FILE" \
-      "ultimoHash:str=${new_hash}" \
-      "ultimoBackup:str=$(timestamp)"
+    # Atualizar estado completo (incluindo mesBackup se houve mudança de mês)
+    if [[ "$criar_arquivo_mensal" == true || -z "$mes_registrado" ]]; then
+      write_state "$STATE_FILE" \
+        "ultimoHash:str=${new_hash}" \
+        "ultimoBackup:str=$(timestamp)" \
+        "mesBackup:str=${mes_atual}"
+    else
+      write_state "$STATE_FILE" \
+        "ultimoHash:str=${new_hash}" \
+        "ultimoBackup:str=$(timestamp)"
+    fi
     
     if [[ -n "$EMAIL_TO" ]]; then
       send_backup_mail "$EMAIL_TO" "$APP_NAME" "$BACKUP_DIARIO" "$items_copiados" "$total_items"

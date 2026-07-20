@@ -36,16 +36,25 @@ check_recent_backups() {
   for conf in "$CONF_DIR"/*.conf; do
     [[ -e "$conf" ]] || continue
     
-    # Extrai APP_ID do .conf
-    local app_id
-    app_id=$(grep -oP 'APP_ID="\K[^"]+' "$conf" 2>/dev/null || echo "unknown")
+    # Sourcear .conf para obter APP_ID (que vem do .env)
+    local app_id=""
+    app_id=$(
+      set +e  # Não abortar se source falhar
+      source "$conf" 2>/dev/null
+      echo "${APP_ID:-}"
+    )
+    
+    if [[ -z "$app_id" ]]; then
+      echo "⚠️  $(basename "$conf"): Não foi possível obter APP_ID"
+      found_issue=1
+      continue
+    fi
     
     # Busca diretório de backup
-    local backup_dir
-    backup_dir=$(find /backups -maxdepth 1 -type d -name "${app_id}_arquivos" 2>/dev/null | head -1)
+    local backup_dir="/backups/${app_id}_arquivos"
     
-    if [[ -z "$backup_dir" ]]; then
-      echo "⚠️  $app_id: Diretório de backup não encontrado"
+    if [[ ! -d "$backup_dir" ]]; then
+      echo "⚠️  $app_id: Diretório de backup não encontrado: $backup_dir"
       found_issue=1
       continue
     fi
